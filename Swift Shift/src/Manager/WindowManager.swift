@@ -7,6 +7,12 @@ struct WindowBounds {
     let bottomRight: NSPoint
 }
 class WindowManager {
+    struct WindowListEntry {
+        let pid: pid_t
+        let layer: Int
+        let alpha: Double
+        let bounds: CGRect
+    }
     static func move(window: AXUIElement, to point: NSPoint) {
         var p = point; let v = AXValueCreate(.cgPoint, &p)!
         AXUIElementSetAttributeValue(window, kAXPositionAttribute as CFString, v)
@@ -27,25 +33,63 @@ class WindowManager {
             var pid: pid_t = 0; AXUIElementGetPid(w, &pid)
             if pid != NSRunningApplication.current.processIdentifier { return w }
         }
-        return getTopWindowAtCursorUsingCGWindowList(mouseLocation: ev.location)
+        if let window = getTopWindowAtCursorUsingCGWindowList(mouseLocation: ev.location) { return window }
+        return getFocusedWindowOfFrontmostApplication(containing: ev.location)
+    }
+    static func windowListCandidates(containing mouseLocation: NSPoint, from entries: [WindowListEntry], excluding excludedPID: pid_t) -> [WindowListEntry] {
+        entries.filter { $0.layer == 0 && $0.alpha > 0 && $0.pid != excludedPID && $0.bounds.contains(mouseLocation) }
     }
     private static func getTopWindowAtCursorUsingCGWindowList(mouseLocation: NSPoint) -> AXUIElement? {
+        let currentPID = NSRunningApplication.current.processIdentifier
+        for entry in windowListCandidates(containing: mouseLocation, from: getWindowListEntries(), excluding: currentPID) {
+            let app = AXUIElementCreateApplication(entry.pid)
+            if let window = getWindow(in: app, containing: mouseLocation) { return window }
+            if let window = getFocusedWindow(from: app) { return window }
+            if let window = getFirstWindow(from: app) { return window }
+        }
+        return nil
+    }
+    private static func getWindowListEntries() -> [WindowListEntry] {
         let list = CGWindowListCopyWindowInfo([.excludeDesktopElements, .optionOnScreenOnly], kCGNullWindowID) as? [[String: AnyObject]] ?? []
-        for e in list {
-            if let bDict = e[kCGWindowBounds as String] as? [String: CGFloat], let b = CGRect(dictionaryRepresentation: bDict as CFDictionary), b.contains(mouseLocation), let pid = e[kCGWindowOwnerPID as String] as? pid_t {
-                let app = AXUIElementCreateApplication(pid); var val: AnyObject?
-                if AXUIElementCopyAttributeValue(app, kAXWindowsAttribute as CFString, &val) == .success, let wList = val as? [AXUIElement] {
-                    for w in wList {
-                        if let pos = getPosition(window: w), let size = getSize(window: w) {
-                            let winRect = CGRect(origin: pos, size: size)
-                            if winRect.contains(mouseLocation) { return w }
-                        }
-                    }
-                    return wList.first
-                }
+        return list.compactMap { entry in
+            guard let boundsDict = entry[kCGWindowBounds as String] as? [String: CGFloat],
+                  let bounds = CGRect(dictionaryRepresentation: boundsDict as CFDictionary),
+                  let pid = entry[kCGWindowOwnerPID as String] as? pid_t else { return nil }
+            let layer = entry[kCGWindowLayer as String] as? Int ?? 0
+            let alpha = entry[kCGWindowAlpha as String] as? Double ?? 1
+            return WindowListEntry(pid: pid, layer: layer, alpha: alpha, bounds: bounds)
+        }
+    }
+    private static func getWindow(in app: AXUIElement, containing mouseLocation: NSPoint) -> AXUIElement? {
+        for window in getWindows(from: app) {
+            if let pos = getPosition(window: window), let size = getSize(window: window) {
+                let rect = CGRect(origin: pos, size: size)
+                if rect.contains(mouseLocation) { return window }
             }
         }
         return nil
+    }
+    private static func getFocusedWindow(from app: AXUIElement) -> AXUIElement? {
+        var value: AnyObject?
+        guard AXUIElementCopyAttributeValue(app, kAXFocusedWindowAttribute as CFString, &value) == .success,
+              let value else { return nil }
+        return unsafeBitCast(value, to: AXUIElement.self)
+    }
+    private static func getFirstWindow(from app: AXUIElement) -> AXUIElement? {
+        getWindows(from: app).first
+    }
+    private static func getWindows(from app: AXUIElement) -> [AXUIElement] {
+        var value: AnyObject?
+        guard AXUIElementCopyAttributeValue(app, kAXWindowsAttribute as CFString, &value) == .success,
+              let windows = value as? [AXUIElement] else { return [] }
+        return windows
+    }
+    private static func getFocusedWindowOfFrontmostApplication(containing mouseLocation: NSPoint) -> AXUIElement? {
+        guard let app = NSWorkspace.shared.frontmostApplication,
+              app.processIdentifier != NSRunningApplication.current.processIdentifier else { return nil }
+        let axApp = AXUIElementCreateApplication(app.processIdentifier)
+        if let window = getWindow(in: axApp, containing: mouseLocation) { return window }
+        return getFocusedWindow(from: axApp)
     }
     private static func getWindow(from element: AXUIElement) -> AXUIElement? {
         var r: AnyObject?; AXUIElementCopyAttributeValue(element, kAXRoleAttribute as CFString, &r)

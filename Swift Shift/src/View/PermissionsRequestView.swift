@@ -34,11 +34,11 @@ struct PermissionRequestView: View {
             icon: "keyboard.badge.eye",
             buttonTitle: "Grant Input Monitoring"
           ) {
-            let granted = PermissionsManager.requestInputMonitoringPermission()
-            if !granted {
+            _ = PermissionsManager.requestInputMonitoringPermission()
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
               PermissionsManager.openPreferences(at: .inputMonitoring)
+              refreshPermissions()
             }
-            refreshPermissions()
           }
         }
       }

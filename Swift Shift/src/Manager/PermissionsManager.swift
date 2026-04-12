@@ -16,6 +16,15 @@ struct PermissionState {
 }
 
 class PermissionsManager {
+  static func preferencesURL(for type: Preference) -> URL? {
+    switch type {
+    case .accessibility:
+      return URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility")
+    case .inputMonitoring:
+      return URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_ListenEvent")
+    }
+  }
+
   static func currentPermissionState() -> PermissionState {
     PermissionState(
       accessibility: hasAccessibilityPermission(),
@@ -44,15 +53,8 @@ class PermissionsManager {
   }
   
   static func openPreferences(at type: Preference) {
-    switch type {
-    case .accessibility:
-      if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility") {
-        NSWorkspace.shared.open(url)
-      }
-    case .inputMonitoring:
-      if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_ListenEvent") {
-        NSWorkspace.shared.open(url)
-      }
+    if let url = preferencesURL(for: type) {
+      NSWorkspace.shared.open(url)
     }
   }
 }
