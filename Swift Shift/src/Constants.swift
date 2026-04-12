@@ -1,0 +1,1 @@
+let MAIN_WINDOW_WIDTH = 320.0
