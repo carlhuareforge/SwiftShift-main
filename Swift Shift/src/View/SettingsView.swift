@@ -18,7 +18,10 @@ struct SettingsView: View {
   @AppStorage(PreferenceKey.requireMouseClick.rawValue) var requireMouseClick = false
 
   private func refreshPermissions() {
-    permissionState = PermissionsManager.currentPermissionState()
+    let newState = PermissionsManager.currentPermissionState()
+    if permissionState != newState {
+      permissionState = newState
+    }
   }
 
   var body: some View {

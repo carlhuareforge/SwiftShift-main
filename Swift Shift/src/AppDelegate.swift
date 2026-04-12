@@ -8,6 +8,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
   override init() {
     super.init()
     AppDelegate.shared = self
+    UserDefaults.standard.register(defaults: [
+      PreferenceKey.focusOnApp.rawValue: true,
+      PreferenceKey.showMenuBarIcon.rawValue: true,
+      PreferenceKey.useQuadrants.rawValue: false,
+      PreferenceKey.requireMouseClick.rawValue: false,
+    ])
     self.shortcutMonitor = GlobalShortcutMonitor()
   }
   

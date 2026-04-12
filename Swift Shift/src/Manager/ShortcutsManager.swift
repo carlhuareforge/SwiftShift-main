@@ -1,5 +1,7 @@
 import ShortcutRecorder
 import CGEventSupervisor
+import AppKit
+import OSLog
 
 enum ShortcutType: String, CaseIterable {
   case move = "Move"
@@ -35,9 +37,15 @@ struct UserShortcut {
 
 class ShortcutsManager {
   static let shared = ShortcutsManager()
+  private static let logger = Logger(subsystem: "com.pablopunk.Swift-Shift", category: "ShortcutsManager")
+  private let watchdogInterval: TimeInterval = 30
+  private let staleTransientStateThreshold: TimeInterval = 30
+  private let stateLock = NSLock()
   private(set) var activeShortcuts: [ShortcutType: Bool] = [:]
   private var mouseSubscriptions: Set<String> = []
-  private var workspaceNotificationObserver: Any?
+  private var lifecycleObservers: [Any] = []
+  private var watchdogTimer: DispatchSourceTimer?
+  private var lastInteractionTime = ProcessInfo.processInfo.systemUptime
   private var modifierOnlyShortcuts: [ShortcutType: UserShortcut] = [:]
   private var activeModifierTrackingType: ShortcutType?
   private var suppressedMouseButton: MouseButton?
@@ -50,56 +58,81 @@ class ShortcutsManager {
     for type in ShortcutType.allCases {
       activeShortcuts[type] = false
     }
-    registerForWorkspaceNotifications()
+    registerForLifecycleNotifications()
+    startWatchdog()
     updateGlobalShortcuts()
   }
   
   deinit {
-    unregisterForWorkspaceNotifications()
+    stopWatchdog()
+    unregisterForLifecycleNotifications()
   }
   
-  private func registerForWorkspaceNotifications() {
+  private func registerForLifecycleNotifications() {
     let notificationCenter = NSWorkspace.shared.notificationCenter
-    workspaceNotificationObserver = notificationCenter.addObserver(
-      forName: NSWorkspace.activeSpaceDidChangeNotification,
-      object: nil,
-      queue: .main) { [weak self] _ in
-        self?.handleSpaceChange()
-      }
-  }
-  
-  private func unregisterForWorkspaceNotifications() {
-    if let observer = workspaceNotificationObserver {
-      NSWorkspace.shared.notificationCenter.removeObserver(observer)
-      workspaceNotificationObserver = nil
+    let names: [NSNotification.Name] = [
+      NSWorkspace.activeSpaceDidChangeNotification,
+      NSWorkspace.willSleepNotification,
+      NSWorkspace.didWakeNotification,
+      NSWorkspace.sessionDidResignActiveNotification,
+      NSWorkspace.sessionDidBecomeActiveNotification,
+    ]
+
+    for name in names {
+      let observer = notificationCenter.addObserver(
+        forName: name,
+        object: nil,
+        queue: .main) { [weak self] _ in
+          self?.handleLifecycleReset(name)
+        }
+      lifecycleObservers.append(observer)
     }
   }
   
-  private func handleSpaceChange() {
-    for type in ShortcutType.allCases {
-      if activeShortcuts[type] == true {
-        activeShortcuts[type] = false
-      }
+  private func unregisterForLifecycleNotifications() {
+    let notificationCenter = NSWorkspace.shared.notificationCenter
+    for observer in lifecycleObservers {
+      notificationCenter.removeObserver(observer)
     }
+    lifecycleObservers.removeAll()
+  }
+
+  private func startWatchdog() {
+    stopWatchdog()
+    let timer = DispatchSource.makeTimerSource(queue: .main)
+    timer.schedule(deadline: .now() + watchdogInterval, repeating: watchdogInterval, leeway: .seconds(1))
+    timer.setEventHandler { [weak self] in
+      self?.runWatchdog()
+    }
+    timer.resume()
+    watchdogTimer = timer
+  }
+
+  private func stopWatchdog() {
+    watchdogTimer?.setEventHandler {}
+    watchdogTimer?.cancel()
+    watchdogTimer = nil
+  }
+
+  private func handleLifecycleReset(_ name: NSNotification.Name) {
+    hardResetInputState(reason: name.rawValue)
+  }
+
+  private func runWatchdog() {
+    guard hasTransientState else { return }
+    guard ProcessInfo.processInfo.systemUptime - lastInteractionTime >= staleTransientStateThreshold else { return }
+    hardResetInputState(reason: "watchdog_stale_state")
   }
   
   func cleanupAllShortcuts() {
-    for type in ShortcutType.allCases {
-      if activeShortcuts[type] == true {
-        let action = type == .move ? MouseAction.move : MouseAction.resize
-        MouseTracker.shared.stopTracking(for: action)
-        cleanupMouseSubscriptions(action: action)
-      }
-    }
+    hardResetInputState(reason: "terminate")
     removeModifierOnlySubscribers()
     removeAllActions()
-    for type in ShortcutType.allCases {
-      activeShortcuts[type] = false
-    }
-    unregisterForWorkspaceNotifications()
+    stopWatchdog()
+    unregisterForLifecycleNotifications()
   }
   
-  func save(_ userShortcut: UserShortcut) {
+  func save(_ userShortcut: UserShortcut, refreshShortcuts: Bool = true) {
     do {
       if let shortcut = userShortcut.shortcut {
         let data = try NSKeyedArchiver.archivedData(withRootObject: shortcut, requiringSecureCoding: false)
@@ -109,7 +142,9 @@ class ShortcutsManager {
     } catch {
       print("Error: \(error)")
     }
-    updateGlobalShortcuts()
+    if refreshShortcuts {
+      updateGlobalShortcuts()
+    }
   }
   
   func load(for type: ShortcutType) -> UserShortcut? {
@@ -124,28 +159,28 @@ class ShortcutsManager {
     }
   }
   
-  func delete(for type: ShortcutType) {
+  func delete(for type: ShortcutType, refreshShortcuts: Bool = true) {
     UserDefaults.standard.removeObject(forKey: type.rawValue)
-    updateGlobalShortcuts()
+    UserDefaults.standard.removeObject(forKey: "\(type.rawValue)_mouseButton")
+    if refreshShortcuts {
+      updateGlobalShortcuts()
+    }
   }
   
   func removeClickActionsForAll() {
     for type in ShortcutType.allCases {
       if var userShortcut = load(for: type) {
         userShortcut.mouseButton = .none
-        self.save(userShortcut)
+        save(userShortcut, refreshShortcuts: false)
       }
     }
+    updateGlobalShortcuts()
   }
   
   private func clearActionsAndMonitors() {
-    stopActiveModifierTracking()
+    hardResetInputState(reason: "shortcut_refresh")
     removeModifierOnlySubscribers()
     removeAllActions()
-    cleanupAllMouseSubscriptions()
-    for type in ShortcutType.allCases {
-      activeShortcuts[type] = false
-    }
   }
   
   private func removeAllActions() {
@@ -163,15 +198,23 @@ class ShortcutsManager {
   private func addActions(mouseAction: MouseAction, for userShortcut: UserShortcut) {
     guard let shortcut = userShortcut.shortcut else { return }
     
-    let keydownAction = ShortcutAction(shortcut: shortcut) { _ in
-      self.activeShortcuts[userShortcut.type] = true
-      self.startTracking(userShortcut, mouseAction)
+    let keydownAction = ShortcutAction(shortcut: shortcut) { [weak self] _ in
+      DispatchQueue.main.async {
+        guard let self = self else { return }
+        guard self.activeShortcuts[userShortcut.type] != true else { return }
+        self.activeShortcuts[userShortcut.type] = true
+        self.touchInteraction()
+        self.startTracking(userShortcut, mouseAction)
+      }
       return true
     }
     
-    let keyupAction = ShortcutAction(shortcut: shortcut) { _ in
-      self.stopTracking(userShortcut, mouseAction)
-      self.activeShortcuts[userShortcut.type] = false
+    let keyupAction = ShortcutAction(shortcut: shortcut) { [weak self] _ in
+      DispatchQueue.main.async {
+        guard let self = self else { return }
+        self.touchInteraction()
+        self.stopTracking(userShortcut, mouseAction)
+      }
       return true
     }
     
@@ -181,7 +224,9 @@ class ShortcutsManager {
   
   private func updateGlobalShortcuts() {
     clearActionsAndMonitors()
+    stateLock.lock()
     modifierOnlyShortcuts.removeAll()
+    stateLock.unlock()
     
     for type in ShortcutType.allCases {
       if let userShortcut = load(for: type), let shortcut = userShortcut.shortcut {
@@ -189,7 +234,9 @@ class ShortcutsManager {
         let isModifierOnlyShortcut = shortcut.charactersIgnoringModifiers == nil
         
         if isModifierOnlyShortcut {
+          stateLock.lock()
           modifierOnlyShortcuts[type] = userShortcut
+          stateLock.unlock()
         } else {
           addActions(mouseAction: mouseAction, for: userShortcut)
         }
@@ -214,18 +261,29 @@ class ShortcutsManager {
       as: downKey,
       to: .cgEvents(downEvent),
       using: { [weak self] event in
-        guard let self = self, self.activeShortcuts[userShortcut.type] == true else { return }
+        guard let self = self else { return }
         event.cancel()
-        MouseTracker.shared.startTracking(for: action, button: userShortcut.mouseButton)
+        let location = event.location
+        DispatchQueue.main.async {
+          self.touchInteraction()
+          MouseTracker.shared.startTracking(
+            for: action,
+            button: userShortcut.mouseButton,
+            triggerLocation: NSPoint(x: location.x, y: location.y)
+          )
+        }
       })
     
     CGEventSupervisor.shared.subscribe(
       as: upKey,
       to: .cgEvents(upEvent),
       using: { [weak self] event in
-        guard let self = self, self.activeShortcuts[userShortcut.type] == true else { return }
+        guard let self = self else { return }
         event.cancel()
-        MouseTracker.shared.stopTracking(for: action)
+        DispatchQueue.main.async {
+          self.touchInteraction()
+          self.stopTracking(userShortcut, action)
+        }
       })
     
     mouseSubscriptions.insert(downKey)
@@ -236,6 +294,7 @@ class ShortcutsManager {
     MouseTracker.shared.stopTracking(for: action)
     cleanupMouseSubscriptions(action: action)
     activeShortcuts[userShortcut.type] = false
+    touchInteraction()
   }
   
   private func cleanupMouseSubscriptions(action: MouseAction) {
@@ -257,7 +316,9 @@ class ShortcutsManager {
         as: modifierFlagsSubscriber,
         to: .nsEvents(.flagsChanged),
         using: { [weak self] event in
-          self?.handleModifierFlagsChanged(event)
+          DispatchQueue.main.async {
+            self?.handleModifierFlagsChanged(event)
+          }
         })
     }
 
@@ -275,7 +336,9 @@ class ShortcutsManager {
         as: modifierKeysSubscriber,
         to: .nsEvents(.keyDown, .keyUp),
         using: { [weak self] event in
-          self?.handleModifierKeyEvent(event)
+          DispatchQueue.main.async {
+            self?.handleModifierKeyEvent(event)
+          }
         })
     }
   }
@@ -284,15 +347,18 @@ class ShortcutsManager {
     CGEventSupervisor.shared.cancel(subscriber: modifierFlagsSubscriber)
     CGEventSupervisor.shared.cancel(subscriber: modifierMouseSubscriber)
     CGEventSupervisor.shared.cancel(subscriber: modifierKeysSubscriber)
+    stateLock.lock()
     modifierOnlyShortcuts.removeAll()
     suppressedMouseButton = nil
     activeModifierTrackingType = nil
+    stateLock.unlock()
   }
 
   private func handleModifierFlagsChanged(_ event: NSEvent) {
     let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+    let shortcuts = modifierOnlyShortcutSnapshot()
 
-    for (type, userShortcut) in modifierOnlyShortcuts where userShortcut.mouseButton == .none {
+    for (type, userShortcut) in shortcuts where userShortcut.mouseButton == .none {
       guard let shortcut = userShortcut.shortcut else { continue }
 
       let matchesShortcut = flags == shortcut.modifierFlags
@@ -301,18 +367,17 @@ class ShortcutsManager {
 
       if matchesShortcut && !isActive {
         activeShortcuts[type] = true
+        touchInteraction()
         MouseTracker.shared.startTracking(for: action, button: .none)
       } else if !matchesShortcut && isActive {
         MouseTracker.shared.stopTracking(for: action)
         activeShortcuts[type] = false
+        touchInteraction()
       }
     }
 
-    guard
-      let activeType = activeModifierTrackingType,
-      let shortcut = modifierOnlyShortcuts[activeType]?.shortcut,
-      flags != shortcut.modifierFlags
-    else { return }
+    let activeType = activeModifierTrackingTypeSnapshot()
+    guard let activeType, let shortcut = shortcuts[activeType]?.shortcut, flags != shortcut.modifierFlags else { return }
 
     stopActiveModifierTracking()
   }
@@ -321,33 +386,38 @@ class ShortcutsManager {
     guard event.type == .keyDown || event.type == .keyUp else { return }
     guard (36...126).contains(event.keyCode) else { return }
 
-    for (type, userShortcut) in modifierOnlyShortcuts where userShortcut.mouseButton == .none {
+    for (type, userShortcut) in modifierOnlyShortcutSnapshot() where userShortcut.mouseButton == .none {
       guard activeShortcuts[type] == true else { continue }
       MouseTracker.shared.stopTracking(for: action(for: type))
       activeShortcuts[type] = false
+      touchInteraction()
     }
   }
 
   private func handleModifierMouseEvent(_ event: CGEvent) {
     guard let mouseButton = mouseButton(for: event.type) else { return }
+    let shortcuts = modifierOnlyShortcutSnapshot()
 
     switch event.type {
     case .leftMouseDown, .rightMouseDown:
-      guard activeModifierTrackingType == nil else { return }
-      guard let shortcut = matchingModifierShortcut(for: mouseButton, flags: eventModifierFlags(event)) else { return }
+      guard activeModifierTrackingTypeSnapshot() == nil else { return }
+      guard let shortcut = matchingModifierShortcut(in: shortcuts, for: mouseButton, flags: eventModifierFlags(event)) else { return }
 
       event.cancel()
-      suppressedMouseButton = mouseButton
-      activeModifierTrackingType = shortcut.type
-      activeShortcuts[shortcut.type] = true
-      MouseTracker.shared.startTracking(for: action(for: shortcut.type), button: mouseButton, modifierFlags: shortcut.shortcut?.modifierFlags)
+      let location = event.location
+      DispatchQueue.main.async { [weak self] in
+        self?.beginModifierTracking(shortcut, mouseButton: mouseButton, location: NSPoint(x: location.x, y: location.y))
+      }
 
     case .leftMouseUp, .rightMouseUp:
-      guard mouseButton == suppressedMouseButton else { return }
+      guard mouseButton == suppressedMouseButtonSnapshot() else { return }
 
       event.cancel()
-      suppressedMouseButton = nil
-      stopActiveModifierTracking()
+      DispatchQueue.main.async { [weak self] in
+        self?.touchInteraction()
+        self?.clearSuppressedMouseButton()
+        self?.stopActiveModifierTracking()
+      }
 
     default:
       break
@@ -355,19 +425,22 @@ class ShortcutsManager {
   }
 
   private func stopActiveModifierTracking() {
-    guard let type = activeModifierTrackingType else { return }
+    guard let type = activeModifierTrackingTypeSnapshot() else { return }
 
     MouseTracker.shared.stopTracking(for: action(for: type))
     activeShortcuts[type] = false
+    stateLock.lock()
     activeModifierTrackingType = nil
+    stateLock.unlock()
+    touchInteraction()
   }
 
   private func action(for type: ShortcutType) -> MouseAction {
     type == .move ? .move : .resize
   }
 
-  private func matchingModifierShortcut(for mouseButton: MouseButton, flags: NSEvent.ModifierFlags) -> UserShortcut? {
-    modifierOnlyShortcuts.values.first(where: {
+  private func matchingModifierShortcut(in shortcuts: [ShortcutType: UserShortcut], for mouseButton: MouseButton, flags: NSEvent.ModifierFlags) -> UserShortcut? {
+    shortcuts.values.first(where: {
       guard let shortcut = $0.shortcut else { return false }
       return $0.mouseButton == mouseButton && shortcut.modifierFlags == flags
     })
@@ -386,5 +459,71 @@ class ShortcutsManager {
 
   private func eventModifierFlags(_ event: CGEvent) -> NSEvent.ModifierFlags {
     NSEvent.ModifierFlags(rawValue: UInt(event.flags.rawValue)).intersection(.deviceIndependentFlagsMask)
+  }
+
+  private func beginModifierTracking(_ shortcut: UserShortcut, mouseButton: MouseButton, location: NSPoint) {
+    guard activeModifierTrackingTypeSnapshot() == nil else { return }
+    stateLock.lock()
+    suppressedMouseButton = mouseButton
+    activeModifierTrackingType = shortcut.type
+    stateLock.unlock()
+    activeShortcuts[shortcut.type] = true
+    touchInteraction()
+    MouseTracker.shared.startTracking(
+      for: action(for: shortcut.type),
+      button: mouseButton,
+      modifierFlags: shortcut.shortcut?.modifierFlags,
+      triggerLocation: location
+    )
+  }
+
+  func hardResetInputState(reason: String) {
+    guard hasTransientState else { return }
+    ShortcutsManager.logger.notice("Reset input state after \(reason, privacy: .public)")
+    MouseTracker.shared.hardReset(reason: reason)
+    cleanupAllMouseSubscriptions()
+    stateLock.lock()
+    activeModifierTrackingType = nil
+    suppressedMouseButton = nil
+    stateLock.unlock()
+    for type in ShortcutType.allCases {
+      activeShortcuts[type] = false
+    }
+    touchInteraction()
+  }
+
+  private var hasTransientState: Bool {
+    activeShortcuts.values.contains(true) || !mouseSubscriptions.isEmpty || activeModifierTrackingTypeSnapshot() != nil || suppressedMouseButtonSnapshot() != nil || MouseTracker.shared.hasResidualInfrastructure
+  }
+
+  private func touchInteraction() {
+    lastInteractionTime = ProcessInfo.processInfo.systemUptime
+  }
+
+  private func modifierOnlyShortcutSnapshot() -> [ShortcutType: UserShortcut] {
+    stateLock.lock()
+    let snapshot = modifierOnlyShortcuts
+    stateLock.unlock()
+    return snapshot
+  }
+
+  private func activeModifierTrackingTypeSnapshot() -> ShortcutType? {
+    stateLock.lock()
+    let snapshot = activeModifierTrackingType
+    stateLock.unlock()
+    return snapshot
+  }
+
+  private func suppressedMouseButtonSnapshot() -> MouseButton? {
+    stateLock.lock()
+    let snapshot = suppressedMouseButton
+    stateLock.unlock()
+    return snapshot
+  }
+
+  private func clearSuppressedMouseButton() {
+    stateLock.lock()
+    suppressedMouseButton = nil
+    stateLock.unlock()
   }
 }

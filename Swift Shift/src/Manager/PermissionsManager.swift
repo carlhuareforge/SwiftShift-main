@@ -6,7 +6,7 @@ enum Preference {
   case inputMonitoring
 }
 
-struct PermissionState {
+struct PermissionState: Equatable {
   var accessibility = false
   var inputMonitoring = false
 
