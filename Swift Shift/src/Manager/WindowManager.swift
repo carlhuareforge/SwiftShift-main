@@ -30,6 +30,9 @@ class WindowManager {
     @discardableResult
     static func resize(window: AXUIElement, to s: CGSize, from o: NSPoint, shouldMoveOrigin: Bool = true) -> AXError {
         if shouldMoveOrigin {
+            NSDisableScreenUpdates()
+            defer { NSEnableScreenUpdates() }
+
             let moveError = move(window: window, to: o)
             if moveError != .success { return moveError }
         }
@@ -53,7 +56,8 @@ class WindowManager {
         let sys = AXUIElementCreateSystemWide(); var el: AXUIElement?
         if AXUIElementCopyElementAtPosition(sys, Float(mouseLocation.x), Float(mouseLocation.y), &el) == .success, let el = el, let w = getWindow(from: el) {
             let pid = windowPID(w)
-            if pid != currentPID {
+            if pid != currentPID,
+               shouldAcceptResolvedWindow(containing: mouseLocation, bounds: windowBounds(window: w)) {
                 logResolution(source: "ax_hit_test", duration: ProcessInfo.processInfo.systemUptime - started, success: true)
                 return w
             }
@@ -80,8 +84,14 @@ class WindowManager {
         for entry in windowListCandidates(containing: mouseLocation, from: getWindowListEntries(), excluding: currentPID) {
             let app = AXUIElementCreateApplication(entry.pid)
             if let window = getWindow(in: app, matching: entry.bounds, containing: mouseLocation) { return window }
-            if let window = getFocusedWindow(from: app) { return window }
-            if let window = getFirstWindow(from: app) { return window }
+            if let window = getFocusedWindow(from: app),
+               shouldAcceptResolvedWindow(containing: mouseLocation, bounds: windowBounds(window: window)) {
+                return window
+            }
+            if let window = getFirstWindow(from: app),
+               shouldAcceptResolvedWindow(containing: mouseLocation, bounds: windowBounds(window: window)) {
+                return window
+            }
         }
         return nil
     }
@@ -125,7 +135,7 @@ class WindowManager {
            let window = getWindow(in: axApp, matching: frontmostEntry.bounds, containing: mouseLocation) {
             return window
         }
-        return getFocusedWindow(from: axApp)
+        return nil
     }
     private static func getWindow(from element: AXUIElement) -> AXUIElement? {
         var r: AnyObject?; AXUIElementCopyAttributeValue(element, kAXRoleAttribute as CFString, &r)
@@ -150,9 +160,18 @@ class WindowManager {
         return WindowBounds(topLeft: fixed, topRight: NSPoint(x: fixed.x + windowSize.width, y: fixed.y), bottomLeft: NSPoint(x: fixed.x, y: fixed.y - windowSize.height), bottomRight: NSPoint(x: fixed.x + windowSize.width, y: fixed.y - windowSize.height))
     }
 
+    static func shouldAcceptResolvedWindow(containing mouseLocation: NSPoint, bounds: CGRect?) -> Bool {
+        guard let bounds else { return false }
+        return bounds.contains(mouseLocation)
+    }
+
+    private static func windowBounds(window: AXUIElement) -> CGRect? {
+        guard let pos = getPosition(window: window), let size = getSize(window: window) else { return nil }
+        return CGRect(origin: pos, size: size)
+    }
+
     private static func windowContains(_ window: AXUIElement, mouseLocation: NSPoint) -> Bool {
-        guard let pos = getPosition(window: window), let size = getSize(window: window) else { return false }
-        return CGRect(origin: pos, size: size).contains(mouseLocation)
+        shouldAcceptResolvedWindow(containing: mouseLocation, bounds: windowBounds(window: window))
     }
 
     private static func windowPID(_ window: AXUIElement) -> pid_t {

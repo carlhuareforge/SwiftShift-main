@@ -4,7 +4,6 @@ import CGEventSupervisor
 import OSLog
 
 enum MouseAction: String { case move, resize, none }
-enum Quadrant { case topLeft, top, topRight, left, center, right, bottomLeft, bottom, bottomRight }
 
 class MouseTracker {
     static let shared = MouseTracker()
@@ -122,21 +121,11 @@ class MouseTracker {
     }
 
     private func determineQuadrant(mouseLocation: NSPoint, windowSize: CGSize, windowLocation: NSPoint) -> Quadrant {
-        let b = WindowManager.getWindowBounds(windowLocation: windowLocation, windowSize: windowSize)
-        let cSize = 0.25, sSize = (1 - cSize) / 2
-        let tx = (b.topRight.x - b.topLeft.x) * sSize, ty = (b.topLeft.y - b.bottomLeft.y) * sSize
-        let lx = b.topLeft.x + tx, rx = b.topRight.x - tx, tyP = b.topLeft.y - ty, by = b.bottomLeft.y + ty
-        switch (mouseLocation.x, mouseLocation.y) {
-            case (..<lx, tyP...): return .topLeft
-            case (lx..<rx, tyP...): return .top
-            case (rx..., tyP...): return .topRight
-            case (..<lx, by..<tyP): return .left
-            case (lx..<rx, by..<tyP): return .center
-            case (rx..., by..<tyP): return .right
-            case (..<lx, ..<by): return .bottomLeft
-            case (lx..<rx, ..<by): return .bottom
-            default: return .bottomRight
-        }
+        DragGeometry.quadrant(
+            mouseLocation: mouseLocation,
+            windowOrigin: windowLocation,
+            windowSize: windowSize
+        )
     }
 
     private func registerTrackingSubscribers(button: MouseButton) {
@@ -274,19 +263,21 @@ class MouseTracker {
         var newOrigin = initialWindowLocation
 
         if shouldUseQuadrants, let quadrant {
-            let dx = location.x - initialMouseLocation.x
-            let dy = location.y - initialMouseLocation.y
-            switch quadrant {
-                case .topLeft: newWidth -= dx; newHeight += dy; newOrigin.x += dx; newOrigin.y -= dy
-                case .top: newHeight += dy; newOrigin.y -= dy
-                case .topRight: newWidth += dx; newHeight += dy; newOrigin.y -= dy
-                case .left: newWidth -= dx; newOrigin.x += dx
-                case .center: newWidth += 2 * dx; newOrigin.x -= dx; newHeight += 2 * dy; newOrigin.y -= dy
-                case .right: newWidth += dx
-                case .bottomLeft: newWidth -= dx; newHeight -= dy; newOrigin.x += dx
-                case .bottom: newHeight -= dy
-                case .bottomRight: newWidth += dx; newHeight -= dy
-            }
+            let resized = DragGeometry.roundedQuadrantResize(
+                frame: DragGeometry.quadrantResize(
+                    initialOrigin: initialWindowLocation,
+                    initialSize: windowSize,
+                    initialPointer: initialMouseLocation,
+                    currentPointer: location,
+                    quadrant: quadrant
+                ),
+                initialOrigin: initialWindowLocation,
+                initialSize: windowSize,
+                quadrant: quadrant
+            )
+            newWidth = resized.size.width
+            newHeight = resized.size.height
+            newOrigin = resized.origin
         } else {
             let resized = DragGeometry.topLeftAnchoredResize(
                 initialSize: windowSize,
