@@ -10,14 +10,17 @@ struct WindowBounds {
 class WindowManager {
     private static let logger = Logger(subsystem: "com.pablopunk.Swift-Shift", category: "WindowManager")
     private static let slowResolutionThreshold: TimeInterval = 0.008
-    private static var cachedWindow: AXUIElement?
-    private static var cachedWindowPID: pid_t?
 
     struct WindowListEntry {
         let pid: pid_t
         let layer: Int
         let alpha: Double
         let bounds: CGRect
+    }
+
+    struct WindowCandidateGeometry {
+        let bounds: CGRect
+        let isFocused: Bool
     }
     @discardableResult
     static func move(window: AXUIElement, to point: NSPoint) -> AXError {
@@ -47,32 +50,21 @@ class WindowManager {
         let started = ProcessInfo.processInfo.systemUptime
         let currentPID = NSRunningApplication.current.processIdentifier
 
-        if let cachedWindow,
-           let cachedPID = cachedWindowPID,
-           cachedPID != currentPID,
-           windowContains(cachedWindow, mouseLocation: mouseLocation) {
-            logResolution(source: "cache", duration: ProcessInfo.processInfo.systemUptime - started, success: true)
-            return cachedWindow
-        }
-
         let sys = AXUIElementCreateSystemWide(); var el: AXUIElement?
         if AXUIElementCopyElementAtPosition(sys, Float(mouseLocation.x), Float(mouseLocation.y), &el) == .success, let el = el, let w = getWindow(from: el) {
             let pid = windowPID(w)
             if pid != currentPID {
-                cache(window: w)
                 logResolution(source: "ax_hit_test", duration: ProcessInfo.processInfo.systemUptime - started, success: true)
                 return w
             }
         }
 
         if let window = getFocusedWindowOfFrontmostApplication(containing: mouseLocation) {
-            cache(window: window)
             logResolution(source: "frontmost_app", duration: ProcessInfo.processInfo.systemUptime - started, success: true)
             return window
         }
 
         if let window = getTopWindowAtCursorUsingCGWindowList(mouseLocation: mouseLocation) {
-            cache(window: window)
             logResolution(source: "cg_window_list", duration: ProcessInfo.processInfo.systemUptime - started, success: true)
             return window
         }
@@ -87,7 +79,7 @@ class WindowManager {
         let currentPID = NSRunningApplication.current.processIdentifier
         for entry in windowListCandidates(containing: mouseLocation, from: getWindowListEntries(), excluding: currentPID) {
             let app = AXUIElementCreateApplication(entry.pid)
-            if let window = getWindow(in: app, containing: mouseLocation) { return window }
+            if let window = getWindow(in: app, matching: entry.bounds, containing: mouseLocation) { return window }
             if let window = getFocusedWindow(from: app) { return window }
             if let window = getFirstWindow(from: app) { return window }
         }
@@ -103,15 +95,6 @@ class WindowManager {
             let alpha = entry[kCGWindowAlpha as String] as? Double ?? 1
             return WindowListEntry(pid: pid, layer: layer, alpha: alpha, bounds: bounds)
         }
-    }
-    private static func getWindow(in app: AXUIElement, containing mouseLocation: NSPoint) -> AXUIElement? {
-        for window in getWindows(from: app) {
-            if let pos = getPosition(window: window), let size = getSize(window: window) {
-                let rect = CGRect(origin: pos, size: size)
-                if rect.contains(mouseLocation) { return window }
-            }
-        }
-        return nil
     }
     private static func getFocusedWindow(from app: AXUIElement) -> AXUIElement? {
         var value: AnyObject?
@@ -132,7 +115,16 @@ class WindowManager {
         guard let app = NSWorkspace.shared.frontmostApplication,
               app.processIdentifier != NSRunningApplication.current.processIdentifier else { return nil }
         let axApp = AXUIElementCreateApplication(app.processIdentifier)
-        if let window = getWindow(in: axApp, containing: mouseLocation) { return window }
+        if let focusedWindow = getFocusedWindow(from: axApp),
+           windowContains(focusedWindow, mouseLocation: mouseLocation) {
+            return focusedWindow
+        }
+        let frontmostEntry = windowListCandidates(containing: mouseLocation, from: getWindowListEntries(), excluding: NSRunningApplication.current.processIdentifier)
+            .first(where: { $0.pid == app.processIdentifier })
+        if let frontmostEntry,
+           let window = getWindow(in: axApp, matching: frontmostEntry.bounds, containing: mouseLocation) {
+            return window
+        }
         return getFocusedWindow(from: axApp)
     }
     private static func getWindow(from element: AXUIElement) -> AXUIElement? {
@@ -158,11 +150,6 @@ class WindowManager {
         return WindowBounds(topLeft: fixed, topRight: NSPoint(x: fixed.x + windowSize.width, y: fixed.y), bottomLeft: NSPoint(x: fixed.x, y: fixed.y - windowSize.height), bottomRight: NSPoint(x: fixed.x + windowSize.width, y: fixed.y - windowSize.height))
     }
 
-    private static func cache(window: AXUIElement) {
-        cachedWindow = window
-        cachedWindowPID = windowPID(window)
-    }
-
     private static func windowContains(_ window: AXUIElement, mouseLocation: NSPoint) -> Bool {
         guard let pos = getPosition(window: window), let size = getSize(window: window) else { return false }
         return CGRect(origin: pos, size: size).contains(mouseLocation)
@@ -172,6 +159,48 @@ class WindowManager {
         var pid: pid_t = 0
         AXUIElementGetPid(window, &pid)
         return pid
+    }
+
+    private static func getWindow(in app: AXUIElement, matching entryBounds: CGRect?, containing mouseLocation: NSPoint) -> AXUIElement? {
+        let focusedWindow = getFocusedWindow(from: app)
+        var windowsWithGeometry: [(window: AXUIElement, geometry: WindowCandidateGeometry)] = []
+
+        for window in getWindows(from: app) {
+            guard let pos = getPosition(window: window), let size = getSize(window: window) else { continue }
+            let bounds = CGRect(origin: pos, size: size)
+            let isFocused = focusedWindow.map { CFEqual($0, window) } ?? false
+            windowsWithGeometry.append((window, WindowCandidateGeometry(bounds: bounds, isFocused: isFocused)))
+        }
+
+        guard let selectedIndex = preferredContainedWindowIndex(
+            containing: mouseLocation,
+            matching: entryBounds,
+            windows: windowsWithGeometry.map(\.geometry)
+        ) else { return nil }
+
+        return windowsWithGeometry[selectedIndex].window
+    }
+
+    static func preferredContainedWindowIndex(containing mouseLocation: NSPoint, matching entryBounds: CGRect?, windows: [WindowCandidateGeometry]) -> Int? {
+        if let focusedIndex = windows.firstIndex(where: { $0.isFocused && $0.bounds.contains(mouseLocation) }) {
+            return focusedIndex
+        }
+
+        let containingIndices = windows.indices.filter { windows[$0].bounds.contains(mouseLocation) }
+        guard !containingIndices.isEmpty else { return nil }
+
+        guard let entryBounds else { return containingIndices.first }
+
+        return containingIndices.min { lhs, rhs in
+            geometryMatchScore(for: windows[lhs].bounds, target: entryBounds) < geometryMatchScore(for: windows[rhs].bounds, target: entryBounds)
+        }
+    }
+
+    private static func geometryMatchScore(for bounds: CGRect, target: CGRect) -> CGFloat {
+        abs(bounds.origin.x - target.origin.x)
+        + abs(bounds.origin.y - target.origin.y)
+        + abs(bounds.size.width - target.size.width)
+        + abs(bounds.size.height - target.size.height)
     }
 
     private static func logResolution(source: String, duration: TimeInterval, success: Bool) {
