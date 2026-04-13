@@ -355,13 +355,13 @@ class ShortcutsManager {
   }
 
   private func handleModifierFlagsChanged(_ event: NSEvent) {
-    let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+    let flags = normalizeShortcutModifierFlags(event.modifierFlags)
     let shortcuts = modifierOnlyShortcutSnapshot()
 
     for (type, userShortcut) in shortcuts where userShortcut.mouseButton == .none {
       guard let shortcut = userShortcut.shortcut else { continue }
 
-      let matchesShortcut = flags == shortcut.modifierFlags
+      let matchesShortcut = flags == normalizeShortcutModifierFlags(shortcut.modifierFlags)
       let isActive = activeShortcuts[type] ?? false
       let action = action(for: type)
 
@@ -377,7 +377,9 @@ class ShortcutsManager {
     }
 
     let activeType = activeModifierTrackingTypeSnapshot()
-    guard let activeType, let shortcut = shortcuts[activeType]?.shortcut, flags != shortcut.modifierFlags else { return }
+    guard let activeType,
+          let shortcut = shortcuts[activeType]?.shortcut,
+          flags != normalizeShortcutModifierFlags(shortcut.modifierFlags) else { return }
 
     stopActiveModifierTracking()
   }
@@ -442,7 +444,7 @@ class ShortcutsManager {
   private func matchingModifierShortcut(in shortcuts: [ShortcutType: UserShortcut], for mouseButton: MouseButton, flags: NSEvent.ModifierFlags) -> UserShortcut? {
     shortcuts.values.first(where: {
       guard let shortcut = $0.shortcut else { return false }
-      return $0.mouseButton == mouseButton && shortcut.modifierFlags == flags
+      return $0.mouseButton == mouseButton && normalizeShortcutModifierFlags(shortcut.modifierFlags) == flags
     })
   }
 
@@ -458,7 +460,7 @@ class ShortcutsManager {
   }
 
   private func eventModifierFlags(_ event: CGEvent) -> NSEvent.ModifierFlags {
-    NSEvent.ModifierFlags(rawValue: UInt(event.flags.rawValue)).intersection(.deviceIndependentFlagsMask)
+    normalizeShortcutModifierFlags(NSEvent.ModifierFlags(rawValue: UInt(event.flags.rawValue)))
   }
 
   private func beginModifierTracking(_ shortcut: UserShortcut, mouseButton: MouseButton, location: NSPoint) {

@@ -149,8 +149,8 @@ class MouseTracker {
                 guard let self = self else { return }
 
                 if let expectedModifierFlags {
-                    let currentFlags = NSEvent.ModifierFlags(rawValue: UInt(event.flags.rawValue)).intersection(.deviceIndependentFlagsMask)
-                    if currentFlags != expectedModifierFlags {
+                    let currentFlags = normalizeShortcutModifierFlags(NSEvent.ModifierFlags(rawValue: UInt(event.flags.rawValue)))
+                    if currentFlags != normalizeShortcutModifierFlags(expectedModifierFlags) {
                         DispatchQueue.main.async {
                             ShortcutsManager.shared.hardResetInputState(reason: "modifier_mismatch")
                         }
@@ -167,8 +167,8 @@ class MouseTracker {
                 as: trackingFlagsSubscriber,
                 to: .nsEvents(.flagsChanged),
                 using: { event in
-                    let currentFlags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
-                    guard currentFlags != expectedModifierFlags else { return }
+                    let currentFlags = normalizeShortcutModifierFlags(event.modifierFlags)
+                    guard currentFlags != normalizeShortcutModifierFlags(expectedModifierFlags) else { return }
                     DispatchQueue.main.async {
                         ShortcutsManager.shared.hardResetInputState(reason: "modifier_released")
                     }
