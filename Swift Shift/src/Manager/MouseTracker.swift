@@ -14,7 +14,6 @@ class MouseTracker {
     private let nominalUpdateInterval: TimeInterval = 1.0 / 120.0
     private let slowWriteThreshold: TimeInterval = 1.0 / 90.0
     private let maxConsecutiveWriteFailures = 4
-    private let trackingInputSubscriber = "tracking_input"
     private let trackingFlagsSubscriber = "tracking_flags"
     private let pendingStateLock = NSLock()
 
@@ -30,9 +29,9 @@ class MouseTracker {
     private var isTracking = false
     private var requiredModifierFlags: NSEvent.ModifierFlags?
     private var pendingMouseLocation: NSPoint?
+    private var lastObservedMouseLocation: NSPoint?
     private var lastInputTime: TimeInterval = 0
     private var updateTimer: DispatchSourceTimer?
-    private var inputSubscriptionActive = false
     private var flagsSubscriptionActive = false
     private var lastAppliedOrigin: NSPoint?
     private var lastAppliedSize: CGSize?
@@ -49,7 +48,7 @@ class MouseTracker {
     private init() {}
 
     var hasResidualInfrastructure: Bool {
-        currentAction != .none || trackedWindow != nil || updateTimer != nil || inputSubscriptionActive || flagsSubscriptionActive || pendingMouseLocation != nil
+        currentAction != .none || trackedWindow != nil || updateTimer != nil || flagsSubscriptionActive || pendingMouseLocation != nil
     }
 
     func startTracking(for action: MouseAction, button: MouseButton, modifierFlags: NSEvent.ModifierFlags? = nil, triggerLocation: NSPoint? = nil) {
@@ -64,6 +63,7 @@ class MouseTracker {
 
         pendingStateLock.lock()
         pendingMouseLocation = initialMouseLocation
+        lastObservedMouseLocation = initialMouseLocation
         lastInputTime = trackingStartedAt
         pendingStateLock.unlock()
     }
@@ -131,37 +131,7 @@ class MouseTracker {
     private func registerTrackingSubscribers(button: MouseButton) {
         removeTrackingSubscribers()
 
-        let inputEventType: CGEventType
-        switch button {
-        case .left:
-            inputEventType = .leftMouseDragged
-        case .right:
-            inputEventType = .rightMouseDragged
-        case .none:
-            inputEventType = .mouseMoved
-        }
-
         let expectedModifierFlags = requiredModifierFlags
-        CGEventSupervisor.shared.subscribe(
-            as: trackingInputSubscriber,
-            to: .cgEvents(inputEventType),
-            using: { [weak self] event in
-                guard let self = self else { return }
-
-                if let expectedModifierFlags {
-                    let currentFlags = normalizeShortcutModifierFlags(NSEvent.ModifierFlags(rawValue: UInt(event.flags.rawValue)))
-                    if currentFlags != normalizeShortcutModifierFlags(expectedModifierFlags) {
-                        DispatchQueue.main.async {
-                            ShortcutsManager.shared.hardResetInputState(reason: "modifier_mismatch")
-                        }
-                        return
-                    }
-                }
-
-                self.recordInput(location: event.location)
-            })
-        inputSubscriptionActive = true
-
         if let expectedModifierFlags {
             CGEventSupervisor.shared.subscribe(
                 as: trackingFlagsSubscriber,
@@ -192,6 +162,8 @@ class MouseTracker {
     private func handleUpdateTick() {
         guard currentAction != .none else { return }
 
+        captureCurrentMouseLocation()
+
         pendingStateLock.lock()
         let idleDuration = now() - lastInputTime
         pendingStateLock.unlock()
@@ -204,13 +176,21 @@ class MouseTracker {
         flushPendingMouseUpdate()
     }
 
-    private func recordInput(location: CGPoint) {
+    private func captureCurrentMouseLocation() {
+        guard let location = WindowManager.currentMouseLocation() else { return }
         pendingStateLock.lock()
-        if pendingMouseLocation != nil {
-            coalescedInputCount += 1
+        if !pointsApproximatelyEqual(location, lastObservedMouseLocation) {
+            if pendingMouseLocation != nil {
+                coalescedInputCount += 1
+            }
+            pendingMouseLocation = location
+            lastObservedMouseLocation = location
+            lastInputTime = now()
+        } else if lastObservedMouseLocation == nil {
+            pendingMouseLocation = location
+            lastObservedMouseLocation = location
+            lastInputTime = now()
         }
-        pendingMouseLocation = NSPoint(x: location.x, y: location.y)
-        lastInputTime = now()
         pendingStateLock.unlock()
     }
 
@@ -363,9 +343,7 @@ class MouseTracker {
     }
 
     private func removeTrackingSubscribers() {
-        CGEventSupervisor.shared.cancel(subscriber: trackingInputSubscriber)
         CGEventSupervisor.shared.cancel(subscriber: trackingFlagsSubscriber)
-        inputSubscriptionActive = false
         flagsSubscriptionActive = false
     }
 
@@ -383,6 +361,7 @@ class MouseTracker {
     private func resetTrackingVariables() {
         pendingStateLock.lock()
         pendingMouseLocation = nil
+        lastObservedMouseLocation = nil
         lastInputTime = 0
         pendingStateLock.unlock()
 

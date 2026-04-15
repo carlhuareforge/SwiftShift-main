@@ -49,6 +49,7 @@ class ShortcutsManager {
   private var modifierOnlyShortcuts: [ShortcutType: UserShortcut] = [:]
   private var activeModifierTrackingType: ShortcutType?
   private var suppressedMouseButton: MouseButton?
+  private var modifierMouseSubscriberActive = false
 
   private let modifierFlagsSubscriber = "modifier_only_flags"
   private let modifierMouseSubscriber = "modifier_only_mouse"
@@ -311,25 +312,14 @@ class ShortcutsManager {
   private func configureModifierOnlyMonitoring() {
     guard !modifierOnlyShortcuts.isEmpty else { return }
 
-    if modifierOnlyShortcuts.values.contains(where: { $0.mouseButton == .none }) {
-      CGEventSupervisor.shared.subscribe(
-        as: modifierFlagsSubscriber,
-        to: .nsEvents(.flagsChanged),
-        using: { [weak self] event in
-          DispatchQueue.main.async {
-            self?.handleModifierFlagsChanged(event)
-          }
-        })
-    }
-
-    if modifierOnlyShortcuts.values.contains(where: { $0.mouseButton != .none }) {
-      CGEventSupervisor.shared.subscribe(
-        as: modifierMouseSubscriber,
-        to: .cgEvents(.leftMouseDown, .leftMouseUp, .rightMouseDown, .rightMouseUp),
-        using: { [weak self] event in
-          self?.handleModifierMouseEvent(event)
-        })
-    }
+    CGEventSupervisor.shared.subscribe(
+      as: modifierFlagsSubscriber,
+      to: .nsEvents(.flagsChanged),
+      using: { [weak self] event in
+        DispatchQueue.main.async {
+          self?.handleModifierFlagsChanged(event)
+        }
+      })
 
     if modifierOnlyShortcuts.values.contains(where: { $0.mouseButton == .none }) {
       CGEventSupervisor.shared.subscribe(
@@ -341,6 +331,8 @@ class ShortcutsManager {
           }
         })
     }
+
+    updateModifierMouseMonitoring(for: currentGlobalModifierFlags())
   }
 
   private func removeModifierOnlySubscribers() {
@@ -351,6 +343,7 @@ class ShortcutsManager {
     modifierOnlyShortcuts.removeAll()
     suppressedMouseButton = nil
     activeModifierTrackingType = nil
+    modifierMouseSubscriberActive = false
     stateLock.unlock()
   }
 
@@ -377,11 +370,13 @@ class ShortcutsManager {
     }
 
     let activeType = activeModifierTrackingTypeSnapshot()
-    guard let activeType,
-          let shortcut = shortcuts[activeType]?.shortcut,
-          flags != normalizeShortcutModifierFlags(shortcut.modifierFlags) else { return }
+    if let activeType,
+       let shortcut = shortcuts[activeType]?.shortcut,
+       flags != normalizeShortcutModifierFlags(shortcut.modifierFlags) {
+      stopActiveModifierTracking()
+    }
 
-    stopActiveModifierTracking()
+    updateModifierMouseMonitoring(for: flags, shortcuts: shortcuts)
   }
 
   private func handleModifierKeyEvent(_ event: NSEvent) {
@@ -435,6 +430,30 @@ class ShortcutsManager {
     activeModifierTrackingType = nil
     stateLock.unlock()
     touchInteraction()
+  }
+
+  private func updateModifierMouseMonitoring(for flags: NSEvent.ModifierFlags, shortcuts: [ShortcutType: UserShortcut]? = nil) {
+    let shortcuts = shortcuts ?? modifierOnlyShortcutSnapshot()
+    let shortcutModifierFlags = shortcuts.values.compactMap { userShortcut -> NSEvent.ModifierFlags? in
+      guard userShortcut.mouseButton != .none, let shortcut = userShortcut.shortcut else { return nil }
+      return shortcut.modifierFlags
+    }
+    let shouldArm = shouldArmModifierMouseMonitor(currentFlags: flags, shortcutModifierFlags: shortcutModifierFlags)
+
+    if shouldArm {
+      guard !modifierMouseSubscriberActive else { return }
+      CGEventSupervisor.shared.subscribe(
+        as: modifierMouseSubscriber,
+        to: .cgEvents(.leftMouseDown, .leftMouseUp, .rightMouseDown, .rightMouseUp),
+        using: { [weak self] event in
+          self?.handleModifierMouseEvent(event)
+        })
+      modifierMouseSubscriberActive = true
+    } else {
+      guard modifierMouseSubscriberActive else { return }
+      CGEventSupervisor.shared.cancel(subscriber: modifierMouseSubscriber)
+      modifierMouseSubscriberActive = false
+    }
   }
 
   private func action(for type: ShortcutType) -> MouseAction {
