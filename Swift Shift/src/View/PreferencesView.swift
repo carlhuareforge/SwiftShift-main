@@ -36,6 +36,8 @@ struct PreferencesView: View {
   @AppStorage(PreferenceKey.focusOnApp.rawValue) var focusOnApp = true
   @AppStorage(PreferenceKey.useQuadrants.rawValue) var useQuadrants = false
   @AppStorage(PreferenceKey.requireMouseClick.rawValue) var requireMouseClick = false
+  @AppStorage(PreferenceKey.enableDockClickToggle.rawValue) var enableDockClickToggle = false
+  @AppStorage(PreferenceKey.dockClickAction.rawValue) var dockClickAction = DockClickActionPreference.hide.rawValue
 
   var body: some View {
     VStack(alignment: .leading, spacing: 8) {
@@ -84,6 +86,50 @@ struct PreferencesView: View {
       .onChange(of: requireMouseClick) { newValue in
         if newValue == false {
           ShortcutsManager.shared.removeClickActionsForAll()
+        }
+      }
+
+      PreferenceToggle(
+        isOn: $enableDockClickToggle,
+        title: "Dock icon click toggle",
+        subtitle: "Frontmost app hides, hidden app restores",
+        icon: "dock.rectangle"
+      )
+      .onChange(of: enableDockClickToggle) { _ in
+        DockClickManager.shared.refreshMonitoring()
+      }
+
+      if enableDockClickToggle {
+        HStack(spacing: 8) {
+          Image(systemName: "arrow.triangle.2.circlepath")
+            .font(.system(size: 13))
+            .foregroundStyle(.tint)
+            .frame(width: 18)
+
+          VStack(alignment: .leading, spacing: 1) {
+            Text("Dock click action")
+              .font(.system(size: 12, weight: .medium))
+            Text("Choose whether visible apps hide or minimize")
+              .font(.system(size: 10))
+              .foregroundStyle(.tertiary)
+              .lineLimit(1)
+          }
+
+          Spacer()
+
+          Picker("", selection: $dockClickAction) {
+            ForEach(DockClickActionPreference.allCases, id: \.self) { action in
+              Text(action.title).tag(action.rawValue)
+            }
+          }
+          .pickerStyle(.menu)
+          .labelsHidden()
+          .controlSize(.mini)
+        }
+        .frame(minHeight: 32)
+        .padding(.leading, 26)
+        .onChange(of: dockClickAction) { _ in
+          DockClickManager.shared.refreshMonitoring()
         }
       }
     }

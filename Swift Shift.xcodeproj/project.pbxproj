@@ -11,6 +11,8 @@
 		172E0BD72B32F36300D5CDA7 /* DragGeometry.swift in Sources */ = {isa = PBXBuildFile; fileRef = 172E0BD62B32F36300D5CDA7 /* DragGeometry.swift */; };
 		173C0E832C123CF700654527 /* DrawCircle.swift in Sources */ = {isa = PBXBuildFile; fileRef = 173C0E822C123CF700654527 /* DrawCircle.swift */; };
 		174652CE2B33345200241CE6 /* WindowManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 174652CD2B33345200241CE6 /* WindowManager.swift */; };
+		174652D02C8AB1000241CE60 /* DockClickBehavior.swift in Sources */ = {isa = PBXBuildFile; fileRef = 174652CF2C8AB1000241CE60 /* DockClickBehavior.swift */; };
+		174652D22C8AB1010241CE60 /* DockClickManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 174652D12C8AB1010241CE60 /* DockClickManager.swift */; };
 		1751BFD42C19DBBC00559AC7 /* UIButton.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1751BFD32C19DBBC00559AC7 /* UIButton.swift */; };
 		177FB2412B31F9B900B11BA3 /* PermissionsRequestView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 177FB2402B31F9B900B11BA3 /* PermissionsRequestView.swift */; };
 		177FB24C2B31FF1E00B11BA3 /* ShortcutView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 177FB24B2B31FF1E00B11BA3 /* ShortcutView.swift */; };
@@ -38,6 +40,8 @@
 		172E0BD62B32F36300D5CDA7 /* DragGeometry.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DragGeometry.swift; sourceTree = "<group>"; };
 		173C0E822C123CF700654527 /* DrawCircle.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DrawCircle.swift; sourceTree = "<group>"; };
 		174652CD2B33345200241CE6 /* WindowManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WindowManager.swift; sourceTree = "<group>"; };
+		174652CF2C8AB1000241CE60 /* DockClickBehavior.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DockClickBehavior.swift; sourceTree = "<group>"; };
+		174652D12C8AB1010241CE60 /* DockClickManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DockClickManager.swift; sourceTree = "<group>"; };
 		1751BFD32C19DBBC00559AC7 /* UIButton.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UIButton.swift; sourceTree = "<group>"; };
 		177FB2402B31F9B900B11BA3 /* PermissionsRequestView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PermissionsRequestView.swift; sourceTree = "<group>"; };
 		177FB24B2B31FF1E00B11BA3 /* ShortcutView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShortcutView.swift; sourceTree = "<group>"; };
@@ -90,6 +94,8 @@
 			isa = PBXGroup;
 			children = (
 				177FB2522B321D0500B11BA3 /* ShortcutsManager.swift */,
+				174652CF2C8AB1000241CE60 /* DockClickBehavior.swift */,
+				174652D12C8AB1010241CE60 /* DockClickManager.swift */,
 				E236331D2B44669200C0E61F /* Preferences.swift */,
 				E2CABBA72B44D69B00D66D43 /* UpdatesManager.swift */,
 				E2D8CFB82B3C3B9B00EBB047 /* PermissionsManager.swift */,
@@ -243,7 +249,9 @@
 				177FB2512B32160B00B11BA3 /* AppDelegate.swift in Sources */,
 				E23633202B4466F800C0E61F /* PreferencesView.swift in Sources */,
 				177FB24C2B31FF1E00B11BA3 /* ShortcutView.swift in Sources */,
+				174652D02C8AB1000241CE60 /* DockClickBehavior.swift in Sources */,
 				172E0BD72B32F36300D5CDA7 /* DragGeometry.swift in Sources */,
+				174652D22C8AB1010241CE60 /* DockClickManager.swift in Sources */,
 				172E0BD52B32F36300D5CDA7 /* MouseTracker.swift in Sources */,
 				1781A5E42B31EE4A00F27910 /* AppView.swift in Sources */,
 				173C0E832C123CF700654527 /* DrawCircle.swift in Sources */,
