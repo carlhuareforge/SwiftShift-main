@@ -1,5 +1,4 @@
 import ShortcutRecorder
-import CGEventSupervisor
 import AppKit
 import OSLog
 

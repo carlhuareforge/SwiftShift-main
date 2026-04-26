@@ -1,6 +1,5 @@
 import Cocoa
 import Accessibility
-import CGEventSupervisor
 import OSLog
 
 enum MouseAction: String { case move, resize, none }
