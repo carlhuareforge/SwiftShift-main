@@ -40,11 +40,13 @@ class ShortcutsManager {
   private static let logger = Logger(subsystem: "com.pablopunk.Swift-Shift", category: "ShortcutsManager")
   private let watchdogInterval: TimeInterval = 30
   private let staleTransientStateThreshold: TimeInterval = 30
+  private let lifecycleRefreshDelay: TimeInterval = 0.75
   private let stateLock = NSLock()
   private(set) var activeShortcuts: [ShortcutType: Bool] = [:]
   private var mouseSubscriptions: Set<String> = []
   private var lifecycleObservers: [Any] = []
   private var watchdogTimer: DispatchSourceTimer?
+  private var lifecycleRefreshWorkItem: DispatchWorkItem?
   private var lastInteractionTime = ProcessInfo.processInfo.systemUptime
   private var modifierOnlyShortcuts: [ShortcutType: UserShortcut] = [:]
   private var activeModifierTrackingType: ShortcutType?
@@ -70,15 +72,8 @@ class ShortcutsManager {
   
   private func registerForLifecycleNotifications() {
     let notificationCenter = NSWorkspace.shared.notificationCenter
-    let names: [NSNotification.Name] = [
-      NSWorkspace.activeSpaceDidChangeNotification,
-      NSWorkspace.willSleepNotification,
-      NSWorkspace.didWakeNotification,
-      NSWorkspace.sessionDidResignActiveNotification,
-      NSWorkspace.sessionDidBecomeActiveNotification,
-    ]
 
-    for name in names {
+    for name in LifecycleShortcutRefreshPolicy.observedNotifications {
       let observer = notificationCenter.addObserver(
         forName: name,
         object: nil,
@@ -116,6 +111,23 @@ class ShortcutsManager {
 
   private func handleLifecycleReset(_ name: NSNotification.Name) {
     hardResetInputState(reason: name.rawValue)
+    if LifecycleShortcutRefreshPolicy.shouldRefreshShortcuts(after: name) {
+      scheduleLifecycleShortcutRefresh(reason: name.rawValue)
+    }
+  }
+
+  private func scheduleLifecycleShortcutRefresh(reason: String) {
+    lifecycleRefreshWorkItem?.cancel()
+
+    let workItem = DispatchWorkItem { [weak self] in
+      guard let self = self else { return }
+      self.lifecycleRefreshWorkItem = nil
+      ShortcutsManager.logger.notice("Refreshing shortcut event taps after \(reason, privacy: .public)")
+      self.updateGlobalShortcuts()
+    }
+
+    lifecycleRefreshWorkItem = workItem
+    DispatchQueue.main.asyncAfter(deadline: .now() + lifecycleRefreshDelay, execute: workItem)
   }
 
   private func runWatchdog() {
@@ -125,6 +137,8 @@ class ShortcutsManager {
   }
   
   func cleanupAllShortcuts() {
+    lifecycleRefreshWorkItem?.cancel()
+    lifecycleRefreshWorkItem = nil
     hardResetInputState(reason: "terminate")
     removeModifierOnlySubscribers()
     removeAllActions()
