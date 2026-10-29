@@ -48,9 +48,12 @@ final class CGEventSupervisor {
         using callback: @escaping NSEventCallback
     ) {
         guard !events.rawValue.isEmpty else { return }
-        let needsSetup = !events.rawValue.allSatisfy { subscribedEvents.contains($0) }
+        let previousMask = eventMask
+        let previousOptions = eventTapOptions
         nsEventSubscribers[subscriber] = (callback, events.rawValue)
-        if needsSetup { setup() }
+        if previousMask != eventMask || previousOptions != eventTapOptions || eventTapMachPort == nil {
+            setup()
+        }
     }
 
     func subscribe(
@@ -59,23 +62,24 @@ final class CGEventSupervisor {
         using callback: @escaping CGEventCallback
     ) {
         guard !events.rawValue.isEmpty else { return }
-        let needsSetup = !events.rawValue.allSatisfy { subscribedEvents.contains($0) }
+        let previousMask = eventMask
+        let previousOptions = eventTapOptions
         cgEventSubscribers[subscriber] = (callback, events.rawValue)
-        if needsSetup { setup() }
+        if previousMask != eventMask || previousOptions != eventTapOptions || eventTapMachPort == nil {
+            setup()
+        }
     }
 
     func cancel(subscriber: String) {
-        let preSubscribedEvents = subscribedEvents
+        let previousMask = eventMask
+        let previousOptions = eventTapOptions
 
         nsEventSubscribers.removeValue(forKey: subscriber)
         cgEventSubscribers.removeValue(forKey: subscriber)
 
-        let postSubscribedEvents = subscribedEvents
-        let needsSetup = !preSubscribedEvents.allSatisfy {
-            postSubscribedEvents.contains($0)
+        if previousMask != eventMask || previousOptions != eventTapOptions {
+            setup()
         }
-
-        if needsSetup { setup() }
     }
 
     func cancelAll() {
@@ -120,7 +124,7 @@ final class CGEventSupervisor {
         guard let eventTapMachPort = CGEvent.tapCreate(
             tap: .cgSessionEventTap,
             place: .headInsertEventTap,
-            options: .defaultTap,
+            options: eventTapOptions,
             eventsOfInterest: eventMask,
             callback: eventSupervisorCallback,
             userInfo: Unmanaged.passUnretained(self).toOpaque()
@@ -154,6 +158,11 @@ final class CGEventSupervisor {
         CGEventMask(subscribedEvents.reduce(0) {
             $0 | (1 << $1.rawValue)
         })
+    }
+
+    private var eventTapOptions: CGEventTapOptions {
+        // NSEvent subscribers observe flags and keys. Only CGEvent subscribers cancel clicks.
+        cgEventSubscribers.isEmpty ? .listenOnly : .defaultTap
     }
 }
 
