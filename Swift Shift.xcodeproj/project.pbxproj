@@ -7,6 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		6E9A1E952EAB4F2D8C44A021 /* AdaptiveWindowWriteCadence.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6E9A1E942EAB4F2D8C44A021 /* AdaptiveWindowWriteCadence.swift */; };
 		172E0BD52B32F36300D5CDA7 /* MouseTracker.swift in Sources */ = {isa = PBXBuildFile; fileRef = 172E0BD42B32F36300D5CDA7 /* MouseTracker.swift */; };
 		172E0BD72B32F36300D5CDA7 /* DragGeometry.swift in Sources */ = {isa = PBXBuildFile; fileRef = 172E0BD62B32F36300D5CDA7 /* DragGeometry.swift */; };
 		173C0E832C123CF700654527 /* DrawCircle.swift in Sources */ = {isa = PBXBuildFile; fileRef = 173C0E822C123CF700654527 /* DrawCircle.swift */; };
@@ -38,6 +39,7 @@
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
+		6E9A1E942EAB4F2D8C44A021 /* AdaptiveWindowWriteCadence.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AdaptiveWindowWriteCadence.swift; sourceTree = "<group>"; };
 		172E0BD42B32F36300D5CDA7 /* MouseTracker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MouseTracker.swift; sourceTree = "<group>"; };
 		172E0BD62B32F36300D5CDA7 /* DragGeometry.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DragGeometry.swift; sourceTree = "<group>"; };
 		173C0E822C123CF700654527 /* DrawCircle.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DrawCircle.swift; sourceTree = "<group>"; };
@@ -105,6 +107,7 @@
 				E236331D2B44669200C0E61F /* Preferences.swift */,
 				E2CABBA72B44D69B00D66D43 /* UpdatesManager.swift */,
 				E2D8CFB82B3C3B9B00EBB047 /* PermissionsManager.swift */,
+				6E9A1E942EAB4F2D8C44A021 /* AdaptiveWindowWriteCadence.swift */,
 				172E0BD62B32F36300D5CDA7 /* DragGeometry.swift */,
 				172E0BD42B32F36300D5CDA7 /* MouseTracker.swift */,
 				174652CD2B33345200241CE6 /* WindowManager.swift */,
@@ -256,6 +259,7 @@
 				E23633202B4466F800C0E61F /* PreferencesView.swift in Sources */,
 				177FB24C2B31FF1E00B11BA3 /* ShortcutView.swift in Sources */,
 				174652D02C8AB1000241CE60 /* DockClickBehavior.swift in Sources */,
+				6E9A1E952EAB4F2D8C44A021 /* AdaptiveWindowWriteCadence.swift in Sources */,
 				172E0BD72B32F36300D5CDA7 /* DragGeometry.swift in Sources */,
 				174652D22C8AB1010241CE60 /* DockClickManager.swift in Sources */,
 				172E0BD52B32F36300D5CDA7 /* MouseTracker.swift in Sources */,

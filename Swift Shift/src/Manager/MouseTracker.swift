@@ -34,6 +34,8 @@ class MouseTracker {
     private var flagsSubscriptionActive = false
     private var lastAppliedOrigin: NSPoint?
     private var lastAppliedSize: CGSize?
+    private var trackedAppName: String?
+    private var trackedAppBundleIdentifier: String?
 
     private var trackingStartedAt: TimeInterval = 0
     private var writeCount = 0
@@ -43,6 +45,9 @@ class MouseTracker {
     private var slowWriteCount = 0
     private var consecutiveWriteFailures = 0
     private var writeFailureCount = 0
+    private var adaptiveWriteSkipCount = 0
+    private var lastWriteStartedAt: TimeInterval?
+    private var writeCadence = AdaptiveWindowWriteCadence()
 
     private init() {}
 
@@ -108,7 +113,11 @@ class MouseTracker {
         requiredModifierFlags = modifierFlags
         lastAppliedOrigin = initialWindowLocation
         lastAppliedSize = windowSize
+        let trackedApplication = WindowManager.getNSApplication(from: currentWindow)
+        trackedAppName = trackedApplication?.localizedName
+        trackedAppBundleIdentifier = trackedApplication?.bundleIdentifier
         resetGestureMetrics()
+        writeCadence.reset(baseMinimumInterval: baseMinimumWriteInterval(for: trackedApplication, action: action))
 
         if action == .resize,
            shouldUseQuadrants,
@@ -193,7 +202,20 @@ class MouseTracker {
         pendingStateLock.unlock()
     }
 
-    private func flushPendingMouseUpdate() {
+    private func flushPendingMouseUpdate(force: Bool = false) {
+        let timestamp = now()
+
+        pendingStateLock.lock()
+        let hasPendingLocation = pendingMouseLocation != nil
+        pendingStateLock.unlock()
+
+        guard hasPendingLocation else { return }
+
+        if !force, !writeCadence.shouldApplyWrite(at: timestamp, lastWriteStartedAt: lastWriteStartedAt) {
+            adaptiveWriteSkipCount += 1
+            return
+        }
+
         pendingStateLock.lock()
         let location = pendingMouseLocation
         pendingMouseLocation = nil
@@ -201,7 +223,9 @@ class MouseTracker {
 
         guard let location else { return }
 
+        let previousWriteStartedAt = lastWriteStartedAt
         let started = now()
+        lastWriteStartedAt = started
         let result: (applied: Bool, error: AXError?)
         switch currentAction {
         case .move:
@@ -212,8 +236,12 @@ class MouseTracker {
             return
         }
 
-        guard result.applied else { return }
-        recordWrite(duration: now() - started, error: result.error)
+        guard result.applied else {
+            lastWriteStartedAt = previousWriteStartedAt
+            return
+        }
+        let duration = now() - started
+        recordWrite(duration: duration, error: result.error)
     }
 
     private func moveWindowBasedOnMouseLocation(_ location: NSPoint) -> (applied: Bool, error: AXError?) {
@@ -293,6 +321,7 @@ class MouseTracker {
         writeCount += 1
         totalWriteDuration += duration
         worstWriteDuration = max(worstWriteDuration, duration)
+        writeCadence.recordWrite(duration: duration)
 
         if duration >= slowWriteThreshold {
             slowWriteCount += 1
@@ -312,7 +341,7 @@ class MouseTracker {
 
     private func stopTracking(for action: MouseAction, reason: String) {
         guard currentAction == action else { return }
-        flushPendingMouseUpdate()
+        flushPendingMouseUpdate(force: true)
         logGestureSummary(reason: reason)
         invalidateUpdateTimer()
         removeTrackingSubscribers()
@@ -328,10 +357,22 @@ class MouseTracker {
         let averageWriteMs = averageWriteDuration * 1000
         let maxWriteMs = worstWriteDuration * 1000
 
-        if slowWriteCount > 0 || writeFailureCount > 0 || coalescedInputCount > 0 || duration > 0.5 {
-            MouseTracker.logger.debug(
-                "\(self.currentAction.rawValue, privacy: .public) gesture ended after \(duration * 1000, format: .fixed(precision: 2)) ms, reason=\(reason, privacy: .public), writes=\(self.writeCount), coalescedInputs=\(self.coalescedInputCount), avgWriteMs=\(averageWriteMs, format: .fixed(precision: 2)), maxWriteMs=\(maxWriteMs, format: .fixed(precision: 2)), slowWrites=\(self.slowWriteCount), failures=\(self.writeFailureCount)"
-            )
+        let shouldLogSummary = slowWriteCount > 0
+            || writeFailureCount > 0
+            || coalescedInputCount > 0
+            || adaptiveWriteSkipCount > 0
+            || duration > 0.5
+        let shouldPersistSummary = isChromiumBundleIdentifier(trackedAppBundleIdentifier)
+
+        if shouldLogSummary || shouldPersistSummary {
+            let targetApp = trackedAppName ?? "unknown"
+            let targetBundle = trackedAppBundleIdentifier ?? "unknown"
+            let summary = "\(self.currentAction.rawValue) gesture ended after \(formattedMilliseconds(duration)) ms, reason=\(reason), target=\(targetApp), bundle=\(targetBundle), writes=\(self.writeCount), coalescedInputs=\(self.coalescedInputCount), cadenceSkips=\(self.adaptiveWriteSkipCount), adaptiveIntervalMs=\(formattedMilliseconds(writeCadence.currentMinimumInterval)), avgWriteMs=\(formattedMilliseconds(averageWriteDuration)), maxWriteMs=\(formattedMilliseconds(worstWriteDuration)), slowWrites=\(self.slowWriteCount), failures=\(self.writeFailureCount)"
+            if shouldPersistSummary {
+                MouseTracker.logger.notice("\(summary, privacy: .public)")
+            } else {
+                MouseTracker.logger.debug("\(summary, privacy: .public)")
+            }
         }
     }
 
@@ -355,6 +396,9 @@ class MouseTracker {
         slowWriteCount = 0
         consecutiveWriteFailures = 0
         writeFailureCount = 0
+        adaptiveWriteSkipCount = 0
+        lastWriteStartedAt = nil
+        writeCadence.reset()
     }
 
     private func resetTrackingVariables() {
@@ -367,6 +411,8 @@ class MouseTracker {
         lastAppliedOrigin = nil
         lastAppliedSize = nil
         trackedWindow = nil
+        trackedAppName = nil
+        trackedAppBundleIdentifier = nil
         initialMouseLocation = nil
         initialWindowLocation = nil
         currentAction = .none
@@ -395,6 +441,32 @@ class MouseTracker {
 
     private func roundedSize(_ size: CGSize) -> CGSize {
         CGSize(width: size.width.rounded(), height: size.height.rounded())
+    }
+
+    private func baseMinimumWriteInterval(for application: NSRunningApplication?, action: MouseAction) -> TimeInterval {
+        guard isChromiumBundleIdentifier(application?.bundleIdentifier) else { return 0 }
+        switch action {
+        case .move:
+            return 1.0 / 45.0
+        case .resize:
+            return 1.0 / 30.0
+        case .none:
+            return 0
+        }
+    }
+
+    private func isChromiumBundleIdentifier(_ bundleIdentifier: String?) -> Bool {
+        guard let bundleIdentifier = bundleIdentifier?.lowercased() else { return false }
+        return [
+            "com.google.chrome",
+            "com.google.chrome.beta",
+            "com.google.chrome.dev",
+            "com.google.chrome.canary"
+        ].contains(bundleIdentifier)
+    }
+
+    private func formattedMilliseconds(_ duration: TimeInterval) -> String {
+        String(format: "%.2f", duration * 1000)
     }
 
     private func now() -> TimeInterval {
